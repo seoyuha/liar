@@ -269,6 +269,9 @@ button.sus{font:inherit}
 .hot{position:absolute;top:0;height:100%;border:0;background:transparent;border-radius:10px;cursor:pointer;transition:box-shadow .15s,background .15s}
 .hot:hover,.hot:focus-visible{background:#fff2;box-shadow:0 0 0 3px #ffe08a,0 0 22px #ffd56a}
 .pchip .x{min-width:34px;min-height:34px}
+.pauseov{position:fixed;inset:0;z-index:80;background:#120c08e8;display:flex;align-items:center;justify-content:center;text-align:center;color:#ffe3b0}
+.pauseov>div{display:flex;flex-direction:column;gap:14px;align-items:center;background:#2a1d14;border:3px solid #edcf8b;border-radius:18px;padding:34px 44px;box-shadow:0 20px 60px #000}
+.pauseov b{font-size:40px}.pauseov span{font-size:22px;line-height:1.5}
 .tb.big{min-height:52px;padding:10px 22px;font-size:18px}
 .waitgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.6fr);gap:14px;align-items:start;max-width:980px;margin:0 auto 14px}
 .mecard{text-align:center}
@@ -930,6 +933,7 @@ function advanceGame(g, room, now){
 }
 function needStep(room, force){
   const g = room && room.game; if (!g) return false;
+  if (meta().paused && !force) return false;                 // 선생님이 멈춘 동안은 진행하지 않음
   const now = DB.now(); const order = toArr(g.order);
   const act = order.filter(p => isOnline(p, now));
   switch (g.phase){
@@ -1119,6 +1123,23 @@ async function doAssign(cand){
    - 같이 해 본 적 없는 친구끼리 먼저 묶음 (바로 전 팀원은 특히 피함)
    ============================================================ */
 const AUTO_START_MS = 3000, AUTO_MAX_WAIT = 4500, AUTO_FINAL_BACK = 5000;
+/* ---------- 게임 멈춤 (반 전체) : 멈춘 시간만큼 모든 방의 남은 시간을 뒤로 미룸 ---------- */
+async function togglePause(){
+  const pz = meta().paused; const now = DB.now();
+  if (!pz){ await DB.update(classPath(), {'meta/paused': {at: now}}); toast('⏸ 모든 방의 게임을 멈췄어요', 2500); return; }
+  const dur = Math.max(0, now - (pz.at || now)); const upd = {'meta/paused': null};
+  for (const [id, r] of Object.entries(rooms())){
+    if (!r) continue;
+    if (r.game && r.game.endsAt) upd[`rooms/${id}/game/endsAt`] = r.game.endsAt + dur;
+    if (r.info && r.info.startAt && !r.game) upd[`rooms/${id}/info/startAt`] = Math.max(now + 2000, r.info.startAt + dur);
+  }
+  S.finalSeen = {};
+  await DB.update(classPath(), upd); toast('▶ 게임을 다시 시작했어요', 2500);
+}
+function pauseOverlay(){
+  if (S.role === 'teacher' || !meta().paused || !['room','wait'].includes(S.view)) return '';
+  return `<div class="pauseov"><div><div style="font-size:72px;line-height:1">⏸</div><b>잠깐 멈춤!</b><span>선생님이 게임을 멈췄어요.<br>선생님 말씀을 들어 주세요.</span></div></div>`;
+}
 function toggleAuto(){
   const on = !meta().auto;
   DB.update(classPath(), {'meta/auto': on});
@@ -1129,7 +1150,7 @@ function waitingStudents(now){
 }
 let autoBusy = false;
 async function autoTick(){
-  if (S.role !== 'teacher' || !S.data || !meta().auto || autoBusy) return;
+  if (S.role !== 'teacher' || !S.data || !meta().auto || autoBusy || meta().paused) return;
   const now = DB.now();
   // 교사 화면이 여러 개 켜져 있어도 하나만 일하도록 잠금
   const lk = meta().autoLock;
@@ -1419,6 +1440,7 @@ function render(){
   else if (S.view === 'results') html = vResults();
   else if (S.view === 'room') html = vRoom(false);
   else if (S.view === 'watch') html = vRoom(true);
+  html += pauseOverlay();
   if (html === S.lastHtml) return;
   const keep = {}; let focusId = null, selS = null, selE = null;
   document.querySelectorAll('#app input[id]').forEach(i => { if (i.type !== 'checkbox') keep[i.id] = i.value; });
@@ -1437,10 +1459,11 @@ function tickTimers(){
     const end = +el.dataset.end; const t = el.querySelector('.t') || el;
     if (!end){ el.classList.add('hide'); return; }
     el.classList.remove('hide');
-    const left = Math.max(0, Math.ceil((end - now)/1000));
+    const pz = meta().paused; const base = pz ? Math.min(now, pz.at || now) : now;
+    const left = Math.max(0, Math.ceil((end - base)/1000));
     t.textContent = `${String(Math.floor(left/60)).padStart(2,'0')}:${String(left%60).padStart(2,'0')}`;
     el.classList.toggle('warn', left <= 10);
-    if (left === 10 && S.view === 'room'){ const k = 'w' + end; if (S.warnKey !== k){ S.warnKey = k; sfx('warn'); } }
+    if (left === 10 && S.view === 'room' && !pz){ const k = 'w' + end; if (S.warnKey !== k){ S.warnKey = k; sfx('warn'); } }
   });
   updateBgm();
 }
@@ -1543,6 +1566,7 @@ function vTeacher(){
     <div class="btnbar">
       <button class="tb ${meta().auto ? 'green' : ''} big" onclick="toggleAuto()">🤖 자동 배정 ${meta().auto ? 'ON' : 'OFF'}</button>
       <button class="tb big" onclick="askAssign()">🔀 지금 전체 다시 배정</button>
+      <button class="tb big ${meta().paused ? 'green' : 'red'}" onclick="togglePause()">${meta().paused ? '▶ 게임 다시 시작' : '⏸ 게임 멈춤 (전체)'}</button>
       <button class="tb blue big" onclick="startAll()">▶ 모든 방 시작</button>
       <button class="tb big" onclick="S.view='results';render()">🏆 결과 · 등수 보기</button>
     </div>
@@ -1595,7 +1619,8 @@ function spyBar(room){
   const info = !g ? '시작 전' : (g.st.mode === 'quiz' ? `❓ ${QUIZ_SETS[QZ(g).set]}: ${esc(QZ(g).q)} → <b>${LET[g.ansPos]}. ${esc(QZ(g).a)}</b>` : `🔑 비밀 단어 <b>${esc(g.word)}</b>${g.st.trap?` · 라이어 단어 <b>${esc(g.liarWord)}</b>`:''}`) + ` · 라이어 <b>${esc(pname(g.liar))}</b> · 단계 <b>${PHASE_KO[g.phase]||''}</b>`;
   return `<div class="spy"><span>${info}</span><span>
     ${!g || g.phase === 'final' ? `<button class="tb sm green" onclick="startRoom('${S.roomId}')">▶ 시작</button> ` : ''}
-    ${g && g.phase !== 'final' ? `<button class="tb sm" onclick="confirmBox('게임을 멈추고 시작 전으로 돌릴까요?', () => DB.update(classPath(), roomResetPayload('${S.roomId}')))">↺ 멈추기</button> ` : ''}
+    ${g && g.phase !== 'final' ? `<button class="tb sm" onclick="confirmBox('이 방 게임을 시작 전으로 돌릴까요?', () => DB.update(classPath(), roomResetPayload('${S.roomId}')))">↺ 처음으로</button> ` : ''}
+    <button class="tb sm ${meta().paused ? 'green' : 'red'}" onclick="togglePause()">${meta().paused ? '▶ 다시 시작' : '⏸ 전체 멈춤'}</button> 
     <button class="tb sm red" onclick="askDeleteRoom('${S.roomId}')">방 삭제</button></span></div>`;
 }
 function vRoom(spec){
@@ -1836,7 +1861,7 @@ function vFinal(room, spec){
    ============================================================ */
 function hostTick(){
   autoTick();
-  if (S.view === 'room' && meta().auto){                       // 자동 배정 모드: 게임이 끝나면 8초 뒤 대기실로
+  if (S.view === 'room' && meta().auto && !meta().paused){                       // 자동 배정 모드: 게임이 끝나면 8초 뒤 대기실로
     const r = curRoom(); S.finalSeen = S.finalSeen || {};
     if (r && r.game && r.game.phase === 'final'){
       if (!S.finalSeen[S.roomId]) S.finalSeen[S.roomId] = DB.now();
