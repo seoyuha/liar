@@ -574,8 +574,12 @@ const DB = (() => {
       const cfg = FIREBASE_CONFIG;
       if (cfg && cfg.apiKey && cfg.databaseURL){
         try{
-          await loadScript('https://cdn.jsdelivr.net/npm/firebase@10.12.2/firebase-app-compat.js');
-          await loadScript('https://cdn.jsdelivr.net/npm/firebase@10.12.2/firebase-database-compat.js');
+          const CDN = ['https://www.gstatic.com/firebasejs/10.12.2/', 'https://cdn.jsdelivr.net/npm/firebase@10.12.2/'];
+          let ok = false;
+          for (const base of CDN){
+            try{ await loadScript(base + 'firebase-app-compat.js'); await loadScript(base + 'firebase-database-compat.js'); ok = true; break; }catch(e){ console.warn('CDN 실패', base); }
+          }
+          if (!ok) throw new Error('Firebase 스크립트를 불러오지 못했어요');
           firebase.initializeApp(cfg);
           fdb = firebase.database();
           fdb.ref('.info/serverTimeOffset').on('value', s => offset = s.val() || 0);
@@ -657,7 +661,16 @@ const toArr = x => Array.isArray(x) ? x.filter(v=>v!=null) : (x ? Object.keys(x)
 const pick = a => a[Math.floor(Math.random()*a.length)];
 const shuffle = a => { a=[...a]; for (let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; };
 const norm = s => String(s||'').toLowerCase().replace(/\s+/g,' ').trim();
-const img = k => A[k] || '';
+const BLOB = {};
+function img(k){
+  if (BLOB[k]) return BLOB[k];
+  const d = A[k]; if (!d) return '';
+  try{
+    const i = d.indexOf(','), mime = d.slice(5, d.indexOf(';')), bin = atob(d.slice(i + 1));
+    const u8 = new Uint8Array(bin.length); for (let j = 0; j < bin.length; j++) u8[j] = bin.charCodeAt(j);
+    return (BLOB[k] = URL.createObjectURL(new Blob([u8], {type: mime})));
+  }catch(e){ return (BLOB[k] = d); }
+}
 const UI = k => img('ui/' + k);
 const ICON = k => img('ui/base_buttons_icons/' + k);
 const face = c => img('characters/' + (CHARS.includes(c)?c:'detective_01'));
@@ -695,7 +708,7 @@ const SND = (() => { let p = {}; try{ p = JSON.parse(localStorage.getItem('liar1
 function saveSound(){ try{ localStorage.setItem('liar10_sound', JSON.stringify({on:SND.on, music:SND.music})); }catch(e){} }
 function sfx(name){
   if (!SND.on || !SND.unlocked || !SFX[name]) return;
-  try{ const src = A['audio/sfx_' + SFX[name]]; if (!src) return;
+  try{ const src = img('audio/sfx_' + SFX[name]); if (!src) return;
     const base = SND.cache[name] || (SND.cache[name] = new Audio(src));
     const a = base.paused ? base : base.cloneNode(); a.volume = SFX_VOL; a.currentTime = 0; a.play().catch(()=>{}); }catch(e){}
 }
@@ -727,7 +740,7 @@ function updateBgm(){
   const old = SND.el; SND.key = key; SND.el = null;
   if (old) fade(old, 0, 700, () => { old.pause(); });
   if (!key) return;
-  try{ const el = new Audio(A['audio/bgm_' + BGM[key]]); el.loop = true; el.volume = 0; el.play().then(() => fade(el, BGM_VOL, 1200)).catch(()=>{}); SND.el = el; }catch(e){}
+  try{ const el = new Audio(img('audio/bgm_' + BGM[key])); el.loop = true; el.volume = 0; el.play().then(() => fade(el, BGM_VOL, 1200)).catch(()=>{}); SND.el = el; }catch(e){}
 }
 function toggleSound(){
   if (SND.on && musicAllowed()){ SND.music = false; }           // 1단계: 배경음악만 끔
@@ -956,8 +969,13 @@ async function enterStudent(){
   const c = cleanCls($('#inCls') && $('#inCls').value), n = String($('#inName') && $('#inName').value || '').trim().slice(0,10);
   if (!c){ toast('반 코드를 써 주세요 (예: 6-1)'); return; }
   if (!n){ toast('이름을 써 주세요'); return; }
-  S.cls = c; S.name = n; S.role = 'student'; savePrefs(); closeModal();
-  subscribe(); await registerStudent(); S.view = 'wait'; render();
+  S.cls = c; S.name = n; S.role = 'student'; savePrefs();
+  subscribe();
+  for (let i = 0; i < 30 && S.data === null; i++) await new Promise(r => setTimeout(r, 100));
+  const now = DB.now();
+  const dup = Object.entries(students()).some(([p, st]) => p !== S.pid && st && st.name && norm(st.name) === norm(n) && isOnline(p, now));
+  if (dup){ if (S.unsub){ S.unsub(); S.unsub = null; } toast('같은 이름의 친구가 이미 있어요. 이름 뒤에 번호를 붙여 주세요 (예: ' + n + '2)', 4000); const i = $('#inName'); i && i.focus(); return; }
+  closeModal(); await registerStudent(); S.view = 'wait'; render();
 }
 async function resumeLast(){
   const L = getLast(); if (!L) return;
@@ -1132,6 +1150,15 @@ async function autoTick(){
       const g = newRound(r, null, 1, now);
       if (g){ upd[`rooms/${id}/game`] = g; upd[`rooms/${id}/info/status`] = 'playing'; }
       else if (now - (r.info.startAt || 0) > 10000){ upd[`rooms/${id}`] = null; members(r).forEach(p => upd[`students/${p}/room`] = ''); }
+    }
+    // ⑤ 아무도 접속해 있지 않은 채 60초가 지난 방(태블릿을 모두 끈 방) 정리
+    S.emptySince = S.emptySince || {};
+    for (const [id, r] of Object.entries(R)){
+      if (!r || !r.info || upd[`rooms/${id}`] === null) continue;
+      const anyOn = members(r).some(p => isOnline(p, now));
+      if (anyOn){ delete S.emptySince[id]; continue; }
+      if (!S.emptySince[id]) S.emptySince[id] = now;
+      else if (now - S.emptySince[id] > 60000){ bankRoom(id); upd[`rooms/${id}`] = null; members(r).forEach(p => upd[`students/${p}/room`] = ''); delete S.emptySince[id]; }
     }
     // ④ 끝난 방: 모두 대기실로 나가면 방 정리
     for (const [id, r] of Object.entries(R)){
@@ -1544,7 +1571,7 @@ function vRoomLobby(room, spec){
   const st = classSettings();
   return {
     side: '',
-    main: `<p class="lead">${esc(room.info.name)} · 팀이 정해졌어요!<small>선생님이 시작하면 게임이 시작돼요 · 게임 방법: <b>${MODE_KO[st.mode]}</b></small></p>
+    main: `<p class="lead">${esc(room.info.name)} · 팀이 정해졌어요!<small>${room.info.auto ? '친구들을 확인하세요. 곧 자동으로 시작해요!' : '선생님이 시작하면 게임이 시작돼요'} · 게임 방법: <b>${MODE_KO[st.mode]}</b></small></p>
       ${GP('players', `<div class="suspects six">${seats.join('')}</div>`)}`,
     note: spec ? '' : '친구들과 인사해 보세요! Hello, detectives!'
   };
