@@ -218,7 +218,7 @@ button.sus{font:inherit}
 .spy b{color:#fff}
 
 /* 스플래시 (final_screens / effects) */
-#splash{position:fixed;inset:0;z-index:70;display:flex;align-items:center;justify-content:center;background:#000a;animation:fadein .25s}
+#splash{position:fixed;inset:0;z-index:70;pointer-events:none;display:flex;align-items:center;justify-content:center;background:#000a;animation:fadein .25s}
 #splash img{width:min(760px,92vw);filter:drop-shadow(0 20px 40px #000);animation:pop .45s cubic-bezier(.2,1.4,.4,1)}
 @keyframes fadein{from{opacity:0}}
 @keyframes pop{from{transform:scale(.6);opacity:0}}
@@ -268,6 +268,7 @@ button.sus{font:inherit}
 .hotrow{position:absolute;left:0;right:0;top:87.3%;height:7.3%}
 .hot{position:absolute;top:0;height:100%;border:0;background:transparent;border-radius:10px;cursor:pointer;transition:box-shadow .15s,background .15s}
 .hot:hover,.hot:focus-visible{background:#fff2;box-shadow:0 0 0 3px #ffe08a,0 0 22px #ffd56a}
+.pchip .x{min-width:34px;min-height:34px}
 .tb.big{min-height:52px;padding:10px 22px;font-size:18px}
 .waitgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.6fr);gap:14px;align-items:start;max-width:980px;margin:0 auto 14px}
 .mecard{text-align:center}
@@ -643,7 +644,7 @@ const ROOM_MAX = 5, ROOM_MIN = 4, PLAY_MIN = 3;
 const ONLINE_MS = 25000, BEAT_MS = 8000;
 const CHARS = ['detective_01','detective_02','detective_03','detective_04','detective_05','detective_06','detective_07','detective_08','detective_09','detective_10'];
 const GENDER = {detective_01:'girl',detective_02:'boy',detective_03:'girl',detective_04:'boy',detective_05:'girl',detective_06:'boy',detective_07:'girl',detective_08:'boy',detective_09:'girl',detective_10:'boy'};
-const DEFAULT_SETTINGS = {mixWait:5, quizSet:'mix', mode:'word', rounds:3, category:'mix', trap:false, laps:1, clueSec:40, answerSec:30, discussSec:40, voteSec:40, bgm:true};
+const DEFAULT_SETTINGS = {teamSize:'auto', mixWait:5, quizSet:'mix', mode:'word', rounds:3, category:'mix', trap:false, laps:1, clueSec:40, answerSec:30, discussSec:40, voteSec:40, bgm:true};
 const PTS_CITIZEN = 1, PTS_LIAR = 3;
 
 /* ============================================================
@@ -765,7 +766,17 @@ document.addEventListener('pointerdown', e => {
 /* ============================================================
    자동 배정 : 한 방 4~5명, 바로 전 게임의 같은 팀 친구와 다시 만나지 않게
    ============================================================ */
+function teamSize(){ const t = classSettings().teamSize; return [3,4,5].includes(+t) ? +t : 0; }
+function teamCap(){ return teamSize() || ROOM_MAX; }
 function groupSizes(n){
+  const s = teamSize();
+  if (s && s < 5 && n >= PLAY_MIN){          // 교사가 고른 인원(3·4명)으로 나누고, 남는 1~2명은 몇 팀을 1명씩 늘려 흡수
+    const q = Math.floor(n / s), r = n % s;
+    if (r === 0) return Array(q).fill(s);
+    if (r >= PLAY_MIN) return [...Array(q).fill(s), r];
+    if (q >= r) return Array.from({length:q}, (_,i) => s + (i < r ? 1 : 0));
+    if (n <= ROOM_MAX) return [n];
+  }
   // 5명씩 나누고, 남는 수가 3이면 3명 팀 하나 · 4면 4명 팀 하나 · 1~2명이면 4명 팀을 늘려서 흡수
   if (n < PLAY_MIN) return [];
   const q = Math.floor(n / 5), r = n % 5;
@@ -789,11 +800,28 @@ function roomCost(g, h){
   return c + (rep > 1 ? (rep - 1) * 100 : 0);     // 되도록 0쌍, 많아야 방마다 1쌍
 }
 function groupCost(groups, h){ return groups.reduce((s, g) => s + roomCost(g, h), 0); }
+function sizeOptions(n){            // 3~5명으로 나누는 모든 방법 (팀 수가 적은 것 먼저)
+  const out = [];
+  for (let k = Math.ceil(n/5); k <= Math.floor(n/3); k++)
+    for (let c = 0; c <= k; c++) for (let b = 0; b + c <= k; b++){ const a = k - b - c; if (3*a + 4*b + 5*c === n) out.push([...Array(c).fill(5), ...Array(b).fill(4), ...Array(a).fill(3)]); }
+  return out;
+}
 function computeGroups(pids, h){
-  const sizes = groupSizes(pids.length); if (!sizes.length) return {groups:[], cost:0};
+  const base = groupSizes(pids.length); if (!base.length) return {groups:[], cost:0};
+  if (teamSize()) return computeGroupsFor(pids, h, base, 200);
+  // 자동: 기본 나누기로 먼저 해 보고, 같이 했던 친구가 겹치면 3~5명의 다른 나누기도 시험해서 가장 덜 겹치는 쪽
+  let best = computeGroupsFor(pids, h, base, 120);
+  if (best.cost > 0) for (const sz of sizeOptions(pids.length).slice(0, 8)){
+    if (sz.join() === base.join()) continue;
+    const r = computeGroupsFor(pids, h, sz, 60);
+    if (r.cost < best.cost){ best = r; if (!r.cost) break; }
+  }
+  return best;
+}
+function computeGroupsFor(pids, h, sizes, tries){
   let best = null, bestCost = Infinity;
   const add = (p, g) => g.reduce((s,q) => s + pairCost(p, q, h), 0);
-  for (let t = 0; t < 200 && bestCost > 0; t++){
+  for (let t = 0; t < tries && bestCost > 0; t++){
     const groups = sizes.map(() => []);
     for (const p of shuffle(pids)){
       const open = groups.map((g,i) => i).filter(i => groups[i].length < sizes[i]);
@@ -1048,8 +1076,8 @@ function checkPin(){
   S.cls = c; S.role = 'teacher'; savePrefs(); closeModal(); subscribe(); S.view = 'teacher'; render();
 }
 function setClassSetting(k, v){
-  const num = ['rounds','laps','clueSec','answerSec','discussSec','voteSec','mixWait'];
-  DB.update(`${classPath()}/settings`, {[k]: num.includes(k) ? +v : (['trap','bgm'].includes(k) ? v === 'true' : v)});
+  const num = ['teamSize','rounds','laps','clueSec','answerSec','discussSec','voteSec','mixWait'];
+  DB.update(`${classPath()}/settings`, {[k]: (k === 'teamSize' && v === 'auto') ? 'auto' : num.includes(k) ? +v : (['trap','bgm'].includes(k) ? v === 'true' : v)});
 }
 function playingRooms(){ return Object.entries(rooms()).filter(([,r]) => r && r.game && r.game.phase !== 'final'); }
 function askAssign(){
@@ -1088,7 +1116,7 @@ async function doAssign(cand){
    - 1~2명만 남으면 곧 시작할 방(5명 미만)에 넣어 주고, 그것도 없으면 다음 친구를 기다림
    - 같이 해 본 적 없는 친구끼리 먼저 묶음 (바로 전 팀원은 특히 피함)
    ============================================================ */
-const AUTO_START_MS = 3000, AUTO_MAX_WAIT = 4500, AUTO_FINAL_BACK = 8000;
+const AUTO_START_MS = 3000, AUTO_MAX_WAIT = 4500, AUTO_FINAL_BACK = 5000;
 function toggleAuto(){
   const on = !meta().auto;
   DB.update(classPath(), {'meta/auto': on});
@@ -1114,10 +1142,10 @@ async function autoTick(){
     W.forEach(p => { if (!S.waitSince[p]) S.waitSince[p] = now; });
     let pool = [...W];
     // ① 곧 시작할 방(시작 전 · 5명 미만)에 빈자리가 있으면 채우기
-    const open = Object.entries(R).filter(([,r]) => r && r.info && r.info.auto && !r.game && members(r).length < ROOM_MAX);
+    const open = Object.entries(R).filter(([,r]) => r && r.info && r.info.auto && !r.game && members(r).length < teamCap());
     for (const [id, r] of open){
       let m = members(r);
-      while (pool.length && m.length < ROOM_MAX){
+      while (pool.length && m.length < teamCap()){
         pool.sort((a,b) => m.reduce((s,q)=>s+pairCost(a,q,h),0) - m.reduce((s,q)=>s+pairCost(b,q,h),0));
         const p = pool.shift(); const i = m.length;
         upd[`rooms/${id}/players/${p}`] = {i}; upd[`students/${p}/room`] = id;
@@ -1131,7 +1159,7 @@ async function autoTick(){
       const {groups, cost} = computeGroups(pool, h);
       const waited = now - oldest;
       const mixMs = Math.max(AUTO_MAX_WAIT, (classSettings().mixWait || 5) * 1000 - 500);   // 같이 해 본 친구만 있으면 다른 팀을 기다리는 최대 시간
-      if ((cost === 0 && pool.length >= ROOM_MAX && waited >= 1000) || (cost === 0 && waited >= AUTO_MAX_WAIT) || waited >= mixMs){
+      if ((cost === 0 && pool.length >= teamCap() && waited >= 1000) || (cost === 0 && waited >= AUTO_MAX_WAIT) || waited >= mixMs){
         let seq = meta().roomSeq || 0;
         groups.forEach((g, i) => {
           seq++; const id = 'a' + (now + i).toString(36);
@@ -1248,6 +1276,14 @@ function ranking(){
   const rows = Object.values(map).sort((a,b) => b.pts - a.pts || b.wins - a.wins || pname(a.pid).localeCompare(pname(b.pid)));
   let rank = 0, prev = null; rows.forEach((r,i) => { if (r.pts !== prev){ rank = i + 1; prev = r.pts; } r.rank = rank; });
   return rows;
+}
+function showRankStu(){
+  const rows = ranking(); const me = rows.find(r => r.pid === S.pid);
+  modal(`<h3 style="text-align:center;margin:0 0 6px">🏆 우리 반 랭킹</h3>
+    <p class="center" style="margin:0 0 8px">시민 승리 +1점 · 라이어 승리 +3점${me ? ` · <b>나: ${me.rank}등 (${me.pts}점)</b>` : ''}</p>
+    <div style="max-height:56vh;overflow:auto"><table class="rank"><thead><tr><th>등수</th><th>이름</th><th>점수</th><th>이긴 판</th></tr></thead>
+    <tbody>${rows.map(r => `<tr class="${r.pid===S.pid?'top':''}"><td>${r.rank<=3?['🥇','🥈','🥉'][r.rank-1]:r.rank}</td><td>${esc(pname(r.pid))}${r.pid===S.pid?' (나)':''}</td><td><b>${r.pts}</b></td><td>${r.wins}</td></tr>`).join('')}</tbody></table></div>
+    <div class="mbtns">${IB('confirm','closeModal()','확인')}</div>`);
 }
 function downloadCSV(){
   const rows = ranking();
@@ -1416,6 +1452,7 @@ function vWait(){
   const waiting = all.filter(([p]) => isOnline(p, now));
   const myRoom = me.room && rooms()[me.room];
   return `${hud(`<div class="tag">반 ${esc(S.cls)}<small>${esc(me.name)} · 누적 ${myTotal(S.pid)}점</small></div>${ICB('help','showHow()','게임 방법')}`)}
+    <div class="btnrow" style="justify-content:center;margin:4px 0 8px"><button class="tb big gold" onclick="showRankStu()">🏆 우리 반 랭킹 보기</button></div>
     <p class="lead">WAITING ROOM · 대기실<small>${meta().auto ? (waitingStudents(now).length >= PLAY_MIN ? '🤖 곧 새 팀이 정해져요 (5초 안에)' : `🤖 자동 배정 중 · 친구 ${PLAY_MIN - waitingStudents(now).length}명이 더 오면 바로 팀이 정해져요`) : '선생님이 팀을 배정하면 자동으로 게임방에 들어가요'}</small></p>
     <div class="waitgrid">
       <div><div class="cbox"><h4>MY DETECTIVE</h4><div class="mecard"><img src="${face(me.char)}" alt=""><b>${esc(me.name)}</b><span>누적 점수 <img src="${ICON('star')}" alt=""> ${myTotal(S.pid)}</span></div></div>
@@ -1433,7 +1470,8 @@ function settingsBox(){
   const sel = (k, label, opts) => `<label>${label}<select onchange="setClassSetting('${k}', this.value)">${opts.map(([v,l]) => `<option value="${v}" ${String(st[k])===String(v)?'selected':''}>${l}</option>`).join('')}</select></label>`;
   return `<div class="cbox"><h4>⚙ 게임 설정</h4><div class="settings wide">
     ${sel('mode','게임 방법',[['word','① 단어 제시 (단어 카드)'],['quiz','② 문제 선택 (4지선다 카드)']])}
-    ${sel('rounds','라운드',[[2,'2라운드'],[3,'3라운드'],[4,'4라운드'],[5,'5라운드']])}
+    ${sel('teamSize','한 팀 인원',[['auto','자동 3~5명 (같은 팀 했던 친구 피하기)'],[3,'3명씩'],[4,'4명씩'],[5,'5명씩']])}
+    ${sel('rounds','라운드 (끝나면 대기실 → 새 팀)',[[1,'1라운드'],[2,'2라운드'],[3,'3라운드'],[4,'4라운드'],[5,'5라운드']])}
     ${st.mode === 'word' ? sel('category','단어 주제',[['mix','섞어서 (47장)'],['food','음식'],['dessert','디저트'],['fruit','과일'],['drink','음료'],['taste','맛']]) + sel('trap','함정 모드',[['false','끄기'],['true','켜기 (라이어도 다른 단어)']]) + sel('laps','힌트 바퀴',[[1,'한 바퀴'],[2,'두 바퀴']]) + sel('clueSec','힌트 시간',[[30,'30초'],[40,'40초'],[60,'60초'],[90,'90초']])
       : sel('quizSet','문제 카드',[['mix','섞어서 (56장)'],['p','그림 문제 (20장)'],['s','문장 문제 (16장)'],['g','문법 문제 (20장)']]) + sel('answerSec','답 고르기 시간',[[20,'20초'],[30,'30초'],[40,'40초'],[60,'60초']])}
     ${sel('discussSec','토론 시간',[[0,'없음'],[30,'30초'],[40,'40초'],[60,'60초'],[90,'90초']])}
