@@ -897,7 +897,7 @@ function advanceGame(g, room, now){
       else { g.phase = 'clue'; g.turn = 0; g.endsAt = now + st.clueSec*1000; }
       break;
     case 'answer':
-      g.phase = 'discuss'; g.endsAt = now + Math.max(30, st.discussSec)*1000; break;
+      g.phase = 'discuss'; g.endsAt = now + Math.max(10, st.discussSec)*1000; break;
     case 'clue': {
       const k = 't' + g.turn; g.clues = g.clues || {};
       if (!g.clues[k]) g.clues[k] = {pid: order[g.turn % n], text:'', skip:true};
@@ -1499,10 +1499,10 @@ function settingsBox(){
     ${sel('mode','게임 방법',[['word','① 단어 제시 (단어 카드)'],['quiz','② 문제 선택 (4지선다 카드)']])}
     ${sel('teamSize','한 팀 인원',[['auto','자동 3~5명 (같은 팀 했던 친구 피하기)'],[3,'3명씩'],[4,'4명씩'],[5,'5명씩']])}
     ${sel('rounds','라운드 (끝나면 대기실 → 새 팀)',[[1,'1라운드'],[2,'2라운드'],[3,'3라운드'],[4,'4라운드'],[5,'5라운드']])}
-    ${st.mode === 'word' ? sel('category','단어 주제',[['mix','섞어서 (47장)'],['food','음식'],['dessert','디저트'],['fruit','과일'],['drink','음료'],['taste','맛']]) + sel('trap','함정 모드',[['false','끄기'],['true','켜기 (라이어도 다른 단어)']]) + sel('laps','힌트 바퀴',[[1,'한 바퀴'],[2,'두 바퀴']]) + sel('clueSec','힌트 시간',[[30,'30초'],[40,'40초'],[60,'60초'],[90,'90초']])
-      : sel('quizSet','문제 카드',[['mix','섞어서 (56장)'],['p','그림 문제 (20장)'],['s','문장 문제 (16장)'],['g','문법 문제 (20장)']]) + sel('answerSec','답 고르기 시간',[[20,'20초'],[30,'30초'],[40,'40초'],[60,'60초']])}
-    ${sel('discussSec','토론 시간',[[0,'없음'],[30,'30초'],[40,'40초'],[60,'60초'],[90,'90초']])}
-    ${sel('voteSec','투표 시간',[[30,'30초'],[40,'40초'],[60,'60초']])}
+    ${st.mode === 'word' ? sel('category','단어 주제',[['mix','섞어서 (47장)'],['food','음식'],['dessert','디저트'],['fruit','과일'],['drink','음료'],['taste','맛']]) + sel('trap','함정 모드',[['false','끄기'],['true','켜기 (라이어도 다른 단어)']]) + sel('laps','힌트 바퀴',[[1,'한 바퀴'],[2,'두 바퀴']]) + sel('clueSec','힌트 시간',[[10,'10초'],[30,'30초'],[40,'40초'],[60,'60초'],[90,'90초']])
+      : sel('quizSet','문제 카드',[['mix','섞어서 (56장)'],['p','그림 문제 (20장)'],['s','문장 문제 (16장)'],['g','문법 문제 (20장)']]) + sel('answerSec','답 고르기 시간',[[10,'10초'],[20,'20초'],[30,'30초'],[40,'40초'],[60,'60초']])}
+    ${sel('discussSec','토론 시간',[[0,'없음'],[10,'10초'],[30,'30초'],[40,'40초'],[60,'60초'],[90,'90초']])}
+    ${sel('voteSec','투표 시간',[[10,'10초'],[30,'30초'],[40,'40초'],[60,'60초']])}
     ${sel('bgm','학생 배경음악',[['true','켜기 (작게)'],['false','끄기 (효과음만)']])}
     ${sel('mixWait','자동 배정 · 섞기 대기',[[5,'5초 (빨리)'],[15,'15초'],[30,'30초 (잘 섞기)']])}
   </div><div class="btnrow" style="margin-top:10px"><button class="tb green big" onclick="askApplyNow()">⚡ 바로 적용</button></div>
