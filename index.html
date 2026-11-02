@@ -373,6 +373,7 @@ table.rank .rn{display:inline-flex;align-items:center;gap:6px}
 <div id="modal" class="hide"></div>
 <div id="toast"></div>
 <div id="splash" class="hide" onclick="hideSplash()"><img alt=""></div>
+<button id="fsBtn" onclick="toggleFull()" style="position:fixed;right:8px;bottom:8px;z-index:60;min-height:40px;padding:6px 12px;border-radius:10px;border:2px solid #edcf8b;background:#2a1d14e6;color:#ffe3b0;font-weight:bold;font-size:14px">⛶ 전체화면</button>
 <script>
 /* ============================================================
    ⚙️ 설정 (교사용)
@@ -997,6 +998,7 @@ async function enterStudent(){
   const c = cleanCls($('#inCls') && $('#inCls').value), n = String($('#inName') && $('#inName').value || '').trim().slice(0,10);
   if (!c){ toast('반 코드를 써 주세요 (예: 6-1)'); return; }
   if (!n){ toast('이름을 써 주세요'); return; }
+  if (!document.fullscreenElement) goFull();     // 입장할 때 전체화면으로
   S.cls = c; S.name = n; S.role = 'student'; savePrefs();
   subscribe();
   for (let i = 0; i < 30 && S.data === null; i++) await new Promise(r => setTimeout(r, 100));
@@ -1384,6 +1386,31 @@ function showWords(){
 /* ============================================================
    화면 그리기
    ============================================================ */
+/* ---------- 한 화면에 다 보이게 (학생 화면은 넘치면 자동으로 줄여서 맞춤) ---------- */
+function fitScreen(){
+  const app = $('#app'); if (!app) return;
+  const fit = ['home','wait','room'].includes(S.view);
+  const cur = parseFloat(app.style.zoom) || 1;
+  if (!fit){ if (cur !== 1) app.style.zoom = ''; return; }
+  const nat = app.getBoundingClientRect().height / cur;            // 줄이기 전 원래 높이
+  const vh = (window.visualViewport ? visualViewport.height : innerHeight) - 4;
+  const z = Math.max(0.7, Math.min(1, vh / nat));
+  if (Math.abs(z - cur) > 0.015) app.style.zoom = z < 0.995 ? z.toFixed(3) : '';
+}
+addEventListener('resize', () => requestAnimationFrame(fitScreen));
+addEventListener('load', () => { if (!fsSupported()){ const b = $('#fsBtn'); if (b) b.style.display = 'none'; } });
+addEventListener('orientationchange', () => setTimeout(fitScreen, 300));
+document.addEventListener('fullscreenchange', () => { setTimeout(fitScreen, 200); const b = $('#fsBtn'); if (b) b.textContent = document.fullscreenElement ? '⤢ 작게' : '⛶ 전체화면'; });
+document.addEventListener('webkitfullscreenchange', () => setTimeout(fitScreen, 200));
+function fsSupported(){ const d = document.documentElement; return !!(d.requestFullscreen || d.webkitRequestFullscreen); }
+function goFull(){
+  const d = document.documentElement;
+  try{ const p = (d.requestFullscreen || d.webkitRequestFullscreen).call(d, {navigationUI:'hide'}); if (p && p.catch) p.catch(() => {}); }catch(e){}
+}
+function toggleFull(){
+  if (document.fullscreenElement || document.webkitFullscreenElement){ (document.exitFullscreen || document.webkitExitFullscreen).call(document); }
+  else goFull();
+}
 function render(){
   let html = '';
   if (S.view === 'home') html = vHome();
@@ -1397,7 +1424,7 @@ function render(){
   document.querySelectorAll('#app input[id]').forEach(i => { if (i.type !== 'checkbox') keep[i.id] = i.value; });
   const ae = document.activeElement;
   if (ae && ae.id && ae.tagName === 'INPUT'){ focusId = ae.id; try{ selS = ae.selectionStart; selE = ae.selectionEnd; }catch(e){} }
-  $('#app').innerHTML = html;
+  $('#app').innerHTML = html; requestAnimationFrame(fitScreen);
   for (const id in keep){ const i = document.getElementById(id); if (i && keep[id] !== '') i.value = keep[id]; }
   if (focusId){ const i = document.getElementById(focusId); if (i){ i.focus(); try{ if (selS!=null) i.setSelectionRange(selS, selE); }catch(e){} } }
   S.lastHtml = html;
